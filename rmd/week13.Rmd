@@ -1,0 +1,188 @@
+---
+title: "Week 13"
+output: html_notebook
+---
+
+
+# R Studio API Code
+```{r}
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+
+
+# Libraries
+```{r, message = F}
+library(tidyverse)
+library(twitteR)
+library(tm)
+library(SnowballC)
+library(textstem)
+library(RWeka)
+library(wordcloud)
+library(ldatuning)
+library(topicmodels)
+library(tidytext)
+library(caret)
+library(LiblineaR)
+```
+
+
+# Data Import and Cleaning
+```{r}
+api <- "FGo4ZHuPDMcADDGSRC1ZjXGUk"
+apiSecret <- "m4zWMREha1fUePelhsck60CQMuO8qKhQucObPycSXvLNneXW5o"
+access <- "1243552285424340994-jeL8kxj8zRP95M9khVPCptH6NaWp7m"
+accessSecret <- "mMoP3SJ2dGY67j1yT9CLLeXTQ60X48ThtHjq1nJOPds6O"
+setup_twitter_oauth(api, apiSecret,access,accessSecret)
+```
+
+
+```{r}
+imported <- searchTwitter("#baking", 5000)
+imported_tbl <- twListToDF(imported) %>%
+  dplyr::filter(isRetweet == F)
+imported_tbl$text <- imported_tbl$text %>% 
+  iconv("UTF-8", "ASCII", sub="")
+```
+
+```{r}
+write.csv(imported_tbl, file = "../output/tweets_original.csv")
+```
+
+
+
+```{r}
+# preprocessed lemmas
+twitter_cp <- VCorpus(VectorSource(imported_tbl))
+
+stops <- c(stopwords(kind = 'en'), '#baking', 'baking', 'false', 'true')
+twitter_cp <- tm_map(twitter_cp, PlainTextDocument)
+twitter_cp <- tm_map(twitter_cp, content_transformer(str_to_lower))
+twitter_cp <- tm_map(twitter_cp, removeWords, stops)
+twitter_cp <- tm_map(twitter_cp, removeNumbers)
+twitter_cp <- tm_map(twitter_cp, removePunctuation)
+twitter_cp <- tm_map(twitter_cp, stripWhitespace)
+twitter_cp <- twitter_cp[-grep("^[http]", twitter_cp[[1]]$content)]
+twitter_cp <- twitter_cp[-grep("^[href]", twitter_cp[[1]]$content)]
+
+
+
+# unigram and bigram DTM
+# RWeka package does not run
+# myTokenizer <- function(x) {NGramTokenizer(x,
+#                                            Weka_control(min=1, max=2))}
+# twitter_dtm <- DocumentTermMatrix(twitter_cp,
+#                                   control = list(
+#                                     tokenize = myTokenizer))
+
+
+twitter_dtm <- DocumentTermMatrix(twitter_cp)
+
+# eliminate sparse terms
+twitter_slimmed <- removeSparseTerms(twitter_dtm, .95)
+
+tokenCounts <- apply(twitter_slimmed, 1, sum)
+twitter_cleaned_dtm <- twitter_slimmed[tokenCounts > 0,]
+twitter_tbl <- as.tibble(as.matrix(twitter_cleaned_dtm))
+
+# delete cases for tweets where no tokens were retained
+dropped_tbl <- imported_tbl %>%
+  unnest_tokens(token, text, token = "ngrams", n = 1) %>%
+  filter(token %in% names(twitter_tbl)) %>%
+  arrange(token)
+```
+
+
+
+# Visualization
+```{r}
+# wordcloud
+wordCounts <- colSums(twitter_tbl)
+wordNames <- names(twitter_tbl)
+wordcloud(wordNames, wordCounts, max.words = 50)
+
+# bar chart
+tibble(wordNames, wordCounts) %>%
+  arrange(desc(wordCounts)) %>%
+  top_n(20) %>%
+  mutate(wordNames = reorder(wordNames, wordCounts)) %>%
+  ggplot(aes(x = wordNames, y = wordCounts)) + geom_col() + coord_flip() + theme_classic()
+```
+
+
+# Analysis
+
+## Topic Modeling
+```{r}
+tuning <- FindTopicsNumber(twitter_cleaned_dtm,
+                           topics = seq(2,15,1), 
+                           metrics = c("Griffiths2004", "CaoJuan2009","Arun2010", "Deveaud2014"),
+                           verbose = T)
+FindTopicsNumber_plot(tuning)
+lda_results <- LDA(twitter_cleaned_dtm, 4) # num topics based on plot
+lda_betas <- tidy(lda_results, matrix="beta")
+lda_gammas <- tidy(lda_results, matrix="gamma")
+
+(topic_top <- lda_betas %>% 
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  arrange(topic, -beta))
+```
+
+
+Topics 1, 2, and 3 are similar, with Topic 2 related more to actions related to baking and Topic 1 and 3 related more to baking recipes and ingredients. Topics 4 seems to include hashtags related to baking.
+
+## Machine Learning
+```{r}
+dropped <- dropped_tbl %>%
+  group_by(token) %>%
+  summarise(popularity = sum(favoriteCount))
+
+transpose_df <- function(df) {
+  t_df <- data.table::transpose(df)
+  colnames(t_df) <- rownames(df)
+  rownames(t_df) <- colnames(df)
+  t_df <- t_df %>%
+    tibble::rownames_to_column(.data = .) %>%
+    tibble::as_tibble(.)
+  return(t_df)
+}
+
+twitter_tbl_ml <- transpose_df(twitter_tbl) %>%
+  inner_join(dropped, by = c("rowname" = "token")) %>%
+  inner_join(lda_betas, by = c("rowname" = "term")) %>%
+  rename(token = rowname) %>%
+  mutate(topic = factor(topic))
+```
+
+
+```{r}
+svm_mod1 <- train(popularity ~ token,
+                 data = twitter_tbl_ml,
+                 # SVM
+                 method = "svmLinear3", 
+                 # missing values
+                 # na.action = na.pass,
+                 # Set cross-validation to be 10 fold
+                 trControl = trainControl("cv", number = 10)) 
+
+
+svm_mod2 <- train(popularity ~ token + topic,
+                 data = twitter_tbl_ml,
+                 # SVM
+                 method = "svmLinear3", 
+                 # Set cross-validation to be 10 fold
+                 trControl = trainControl("cv", number = 10)) 
+
+# comparing cross-validated
+summary(resamples(list(svm_mod1, svm_mod2)))
+dotplot(resamples(list(svm_mod1, svm_mod2)), metric="RMSE")
+```
+
+
+## Final Interpretation
+
+
+Based on the comparison of the two models and the topics extracted from the analysis, it seems like topics are not very meaningful and too noisy, leading to the model 2 with topic as the added predictors are not 
+
