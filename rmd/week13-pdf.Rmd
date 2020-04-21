@@ -29,10 +29,10 @@ library(LiblineaR)
 
 # Data Import and Cleaning
 ```{r}
-api
-apiSecret 
-access 
-accessSecret 
+api <- "FGo4ZHuPDMcADDGSRC1ZjXGUk"
+apiSecret <- "m4zWMREha1fUePelhsck60CQMuO8qKhQucObPycSXvLNneXW5o"
+access <- "1243552285424340994-jeL8kxj8zRP95M9khVPCptH6NaWp7m"
+accessSecret <- "mMoP3SJ2dGY67j1yT9CLLeXTQ60X48ThtHjq1nJOPds6O"
 setup_twitter_oauth(api, apiSecret,access,accessSecret)
 ```
 
@@ -47,19 +47,22 @@ imported_tbl$text <- imported_tbl$text %>%
 
 
 
+
 ```{r}
 # preprocessed lemmas
 twitter_cp <- VCorpus(VectorSource(imported_tbl))
 
 stops <- c(stopwords(kind = 'en'), '#baking', 'baking', 'false', 'true')
+removeURL <- function(x) {
+  gsub("http.*", "", x)
+  gsub("href.*", "", x)}
 twitter_cp <- tm_map(twitter_cp, PlainTextDocument)
 twitter_cp <- tm_map(twitter_cp, content_transformer(str_to_lower))
 twitter_cp <- tm_map(twitter_cp, removeWords, stops)
 twitter_cp <- tm_map(twitter_cp, removeNumbers)
 twitter_cp <- tm_map(twitter_cp, removePunctuation)
 twitter_cp <- tm_map(twitter_cp, stripWhitespace)
-twitter_cp <- twitter_cp[-grep("^[http]", twitter_cp[[1]]$content)]
-twitter_cp <- twitter_cp[-grep("^[href]", twitter_cp[[1]]$content)]
+twitter_cp <- tm_map(twitter_cp, content_transformer(removeURL))
 
 
 

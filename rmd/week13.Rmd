@@ -18,7 +18,6 @@ library(twitteR)
 library(tm)
 library(SnowballC)
 library(textstem)
-library(RWeka)
 library(wordcloud)
 library(ldatuning)
 library(topicmodels)
@@ -57,14 +56,17 @@ write.csv(imported_tbl, file = "../output/tweets_original.csv")
 twitter_cp <- VCorpus(VectorSource(imported_tbl))
 
 stops <- c(stopwords(kind = 'en'), '#baking', 'baking', 'false', 'true')
+removeURL <- function(x) {
+  gsub("http.*", "", x)
+  gsub("href.*", "", x)}
 twitter_cp <- tm_map(twitter_cp, PlainTextDocument)
 twitter_cp <- tm_map(twitter_cp, content_transformer(str_to_lower))
 twitter_cp <- tm_map(twitter_cp, removeWords, stops)
 twitter_cp <- tm_map(twitter_cp, removeNumbers)
 twitter_cp <- tm_map(twitter_cp, removePunctuation)
 twitter_cp <- tm_map(twitter_cp, stripWhitespace)
-twitter_cp <- twitter_cp[-grep("^[http]", twitter_cp[[1]]$content)]
-twitter_cp <- twitter_cp[-grep("^[href]", twitter_cp[[1]]$content)]
+twitter_cp <- tm_map(twitter_cp, content_transformer(removeURL))
+
 
 
 
